@@ -45,7 +45,24 @@ RUN_NAME = "fedprox"
 
 
 def main():
+    algo_name = "fedprox"
     print(">>> FedProx main() started")
+
+    os.makedirs("results", exist_ok=True)
+
+    csv_path = os.path.join("results", f"{RUN_NAME}.csv")
+
+    with open(csv_path, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "algo",
+            "coreset",
+            "alpha",
+            "round",
+            "test_loss",
+            "test_acc",
+        ])
+
 
     # Set seed
     set_seed(SEED)
@@ -146,6 +163,23 @@ def main():
         # 7. Evaluate on global test set
         test_loss, test_acc = evaluate(global_model, test_loader, device)
         print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.4f}")
+
+        if not USE_CORESET:
+            coreset_label = "full"
+        else:
+            coreset_label = CORESET_METHOD
+
+        with open(csv_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                algo_name,
+                coreset_label,
+                ALPHA,
+                rnd,
+                test_loss,
+                test_acc,
+            ])
+
 
 
 if __name__ == "__main__":

@@ -41,9 +41,30 @@ CORESET_RATIO = 0.3       # 30% of each client's data
 CORESET_METHOD = "craig"   # "random" or "craig"
 # =====================================================
 
+RUN_NAME = "fedavg" 
+
 
 def main():
+    algo_name = "fedavg"
     print(">>> FedAvg main() started")
+
+    # Create results directory
+    os.makedirs("results", exist_ok=True)
+
+    # Define CSV path for this run
+    csv_path = os.path.join("results", f"{RUN_NAME}.csv")
+
+    # Overwrite file and write header
+    with open(csv_path, mode="w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "algo",          # fedavg or fedprox
+            "coreset",       # full, random, craig, etc.
+            "alpha",         # Dirichlet alpha
+            "round",
+            "test_loss",
+            "test_acc",
+        ])
 
     # Set seed
     set_seed(SEED)
@@ -126,6 +147,24 @@ def main():
         # 7. Evaluation
         test_loss, test_acc = evaluate(global_model, test_loader, device)
         print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.4f}")
+
+        # Determine coreset label
+        if not USE_CORESET:
+            coreset_label = "full"
+        else:
+            coreset_label = CORESET_METHOD  # e.g., "random" or "craig"
+
+        # Append this round's result to CSV
+        with open(csv_path, mode="a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                algo_name,
+                coreset_label,
+                ALPHA,
+                rnd,
+                test_loss,
+                test_acc,
+            ])
 
 
 if __name__ == "__main__":
