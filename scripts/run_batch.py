@@ -1,176 +1,114 @@
 import os
 
-""""
 # =====================================================
-# 🔧 HYPERPARAMETERS NOTATIONS
+# 🔧 HYPERPARAMETERS NOTATIONS (GLOBAL DEFAULTS HERE)
+# =====================================================
+# NUM_CLIENTS   : number of simulated clients
+# ALPHA         : Dirichlet concentration; smaller ⇒ more non-IID
+# NUM_ROUNDS    : total communication rounds
+# LOCAL_EPOCHS  : local epochs per client per round
+# LR            : local learning rate (client SGD)
+# MU            : FedProx proximal coefficient μ
+# FRAC_CLIENTS  : fraction of clients sampled each round
+# BATCH_SIZE    : local training batch size
+# DATA_DIR      : where CIFAR-100 is stored/downloaded
+#
+# NOTE:
+# - These are the "real experiment" settings.
+# - run_fedavg.py / run_fedprox.py have SMALL defaults for debugging,
+#   but run_batch.py overrides them via environment variables.
 # =====================================================
 
-NUM_CLIENTS = 10            # number of simulated clients
-ALPHA = 0.5                 # Dirichlet concentration; smaller = more non-IID
-NUM_ROUNDS = 10             # communication rounds
-LOCAL_EPOCHS = 1            # local epochs per client per round
-LR = 0.01                   # local learning rate
-MU = 0.001                  # FedProx proximal coefficient
-FRAC_CLIENTS = 0.5          # fraction of clients sampled each round
-BATCH_SIZE = 64             # batch size for local training
-DATA_DIR = "./data"         # where CIFAR-100 is stored/downloaded
-SEED = 42                   # RNG seed for reproducibility
+NUM_CLIENTS   = 10
+NUM_ROUNDS    = 20
+LOCAL_EPOCHS  = 1
+LR            = 0.01
+MU            = 0.001      # FedProx μ
+FRAC_CLIENTS  = 0.5
+BATCH_SIZE    = 64
+DATA_DIR      = "./data"
 
-USE_CORESET = True          # True: train on random coreset; False: full client data
-CORESET_RATIO = 0.3         # fraction of each client's data to keep in coreset
-CORESET_METHOD = "craig"   # "random" or "craig"
+# Experiment grid:
+ALPHAS = [0.1, 0.5]        # non-IID severity levels to test
+SEEDS  = [42, 43, 44]      # seeds per config (for averaging)
 
-# =====================================================
-"""
-
-# List of experiment configs
-# You can edit this list to add/remove experiments.
-# Each dict is ONE run (one seed/config).
-experiments = [
-    # --- FedAvg, full data, 3 seeds ---
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_full_seed1",
-        "alpha": 0.5,
-        "use_coreset": False,
-        "coreset_method": "random",   # ignored if use_coreset=False
-        "coreset_ratio": 0.0,
-        "seed": 42,
-    },
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_full_seed2",
-        "alpha": 0.5,
-        "use_coreset": False,
-        "coreset_method": "random",
-        "coreset_ratio": 0.0,
-        "seed": 43,
-    },
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_full_seed3",
-        "alpha": 0.5,
-        "use_coreset": False,
-        "coreset_method": "random",
-        "coreset_ratio": 0.0,
-        "seed": 44,
-    },
-
-    # --- FedAvg, random coreset 30%, 3 seeds ---
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_random_0_3_seed1",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "random",
-        "coreset_ratio": 0.3,
-        "seed": 52,
-    },
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_random_0_3_seed2",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "random",
-        "coreset_ratio": 0.3,
-        "seed": 53,
-    },
-    {
-        "algo": "fedavg",
-        "run_name": "fedavg_random_0_3_seed3",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "random",
-        "coreset_ratio": 0.3,
-        "seed": 54,
-    },
-
-    # --- FedProx, CRAIG-lite coreset 30%, 3 seeds (example) ---
-    {
-        "algo": "fedprox",
-        "run_name": "fedprox_craig_0_3_seed1",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "craig",
-        "coreset_ratio": 0.3,
-        "seed": 62,
-    },
-    {
-        "algo": "fedprox",
-        "run_name": "fedprox_craig_0_3_seed2",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "craig",
-        "coreset_ratio": 0.3,
-        "seed": 63,
-    },
-    {
-        "algo": "fedprox",
-        "run_name": "fedprox_craig_0_3_seed3",
-        "alpha": 0.5,
-        "use_coreset": True,
-        "coreset_method": "craig",
-        "coreset_ratio": 0.3,
-        "seed": 64,
-    },
+# (algo, coreset_type, use_coreset, coreset_ratio)
+# coreset_type will be written into "coreset" column in CSV:
+#   "full"   : USE_CORESET=False (coreset_ratio ignored)
+#   "random" : random subset
+#   "craig"  : CRAIG-lite feature-based subset
+CORESET_CONFIGS = [
+    ("fedavg",  "full",   False, 0.0),
+    ("fedavg",  "random", True,  0.3),
+    ("fedavg",  "craig",  True,  0.3),
+    ("fedprox", "full",   False, 0.0),
+    ("fedprox", "random", True,  0.3),
+    ("fedprox", "craig",  True,  0.3),
 ]
-
-# Global defaults (you can tune once here)
-NUM_CLIENTS = 10
-NUM_ROUNDS = 10
-LOCAL_EPOCHS = 1
-LR = 0.01
-MU = 0.001         # used only for FedProx
-FRAC_CLIENTS = 0.5
-BATCH_SIZE = 64
-DATA_DIR = "./data"
 
 
 def run_experiment(cfg):
+    """
+    cfg = (algo, coreset_type, alpha, seed, use_coreset, coreset_ratio)
+    """
+    algo, coreset_type, alpha, seed, use_coreset, coreset_ratio = cfg
+
+    # Construct a unique run name, e.g.:
+    #   fedavg_random_a0_5_seed42
+    run_name = f"{algo}_{coreset_type}_a{alpha}_seed{seed}".replace(".", "_")
+
     print("\n" + "=" * 60)
-    print(f"Running experiment: {cfg['run_name']}")
-    print(f"  Algo: {cfg['algo']}")
-    print(f"  Alpha: {cfg['alpha']}")
-    print(f"  Coreset: {'full' if not cfg['use_coreset'] else cfg['coreset_method']} "
-          f"({cfg['coreset_ratio']})")
-    print(f"  Seed: {cfg['seed']}")
+    print(f"Running experiment: {run_name}")
+    print(f"  Algo   : {algo}")
+    print(f"  Alpha  : {alpha}")
+    print(f"  Coreset: {coreset_type} "
+          f"(use_coreset={use_coreset}, ratio={coreset_ratio})")
+    print(f"  Seed   : {seed}")
     print("=" * 60)
 
-    # Set env vars for this run
-    os.environ["RUN_NAME"] = cfg["run_name"]
-    os.environ["NUM_CLIENTS"] = str(NUM_CLIENTS)
-    os.environ["ALPHA"] = str(cfg["alpha"])
-    os.environ["NUM_ROUNDS"] = str(NUM_ROUNDS)
-    os.environ["LOCAL_EPOCHS"] = str(LOCAL_EPOCHS)
-    os.environ["LR"] = str(LR)
-    os.environ["FRAC_CLIENTS"] = str(FRAC_CLIENTS)
-    os.environ["BATCH_SIZE"] = str(BATCH_SIZE)
-    os.environ["DATA_DIR"] = DATA_DIR
-    os.environ["SEED"] = str(cfg["seed"])
+    # Set env vars for this run (used by run_fedavg / run_fedprox)
+    os.environ["RUN_NAME"]      = run_name
+    os.environ["NUM_CLIENTS"]   = str(NUM_CLIENTS)
+    os.environ["ALPHA"]         = str(alpha)
+    os.environ["NUM_ROUNDS"]    = str(NUM_ROUNDS)
+    os.environ["LOCAL_EPOCHS"]  = str(LOCAL_EPOCHS)
+    os.environ["LR"]            = str(LR)
+    os.environ["FRAC_CLIENTS"]  = str(FRAC_CLIENTS)
+    os.environ["BATCH_SIZE"]    = str(BATCH_SIZE)
+    os.environ["DATA_DIR"]      = DATA_DIR
+    os.environ["SEED"]          = str(seed)
 
-    os.environ["USE_CORESET"] = "1" if cfg["use_coreset"] else "0"
-    os.environ["CORESET_METHOD"] = cfg["coreset_method"]
-    os.environ["CORESET_RATIO"] = str(cfg["coreset_ratio"])
+    os.environ["USE_CORESET"]   = "1" if use_coreset else "0"
+    os.environ["CORESET_METHOD"] = coreset_type  # "full" is ignored if USE_CORESET=0
+    os.environ["CORESET_RATIO"]  = str(coreset_ratio)
 
-    # FedProx-specific μ
-    os.environ["MU"] = str(MU)
+    os.environ["MU"]            = str(MU)        # used by FedProx, harmless for FedAvg
 
-    # Call the appropriate training script
-    if cfg["algo"] == "fedavg":
+    # Choose which script to run
+    if algo == "fedavg":
         cmd = "python -m scripts.run_fedavg"
-    elif cfg["algo"] == "fedprox":
+    elif algo == "fedprox":
         cmd = "python -m scripts.run_fedprox"
     else:
-        raise ValueError(f"Unknown algo: {cfg['algo']}")
+        raise ValueError(f"Unknown algo: {algo}")
 
     print(f"Executing: {cmd}")
     code = os.system(cmd)
     if code != 0:
-        print(f"Run {cfg['run_name']} exited with code {code}")
+        print(f"Run {run_name} exited with code {code}")
 
 
 def main():
-    for cfg in experiments:
+    all_cfgs = []
+    for alpha in ALPHAS:
+        for seed in SEEDS:
+            for algo, coreset_type, use_coreset, coreset_ratio in CORESET_CONFIGS:
+                all_cfgs.append(
+                    (algo, coreset_type, alpha, seed, use_coreset, coreset_ratio)
+                )
+
+    print(f"Total runs to execute: {len(all_cfgs)}")
+    for cfg in all_cfgs:
         run_experiment(cfg)
 
 

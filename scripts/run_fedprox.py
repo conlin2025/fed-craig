@@ -17,39 +17,52 @@ from fed.models import get_model
 from fed.algorithms import local_update_fedprox, aggregate_models
 from fed.utils import evaluate, set_seed
 from fed.selections import random_coreset, craig_like_coreset
-from fed.datasets import get_loader_from_indices
-
 
 # =====================================================
-# 🔧 HYPERPARAMETERS — CAN BE OVERRIDDEN BY ENV VARS
+# 🔧 HYPERPARAMETER NOTATION
+# -----------------------------------------------------
+# NUM_CLIENTS    : number of simulated clients
+# ALPHA          : Dirichlet concentration; smaller ⇒ more non-IID
+# NUM_ROUNDS     : total communication rounds
+# LOCAL_EPOCHS   : local epochs per client per round
+# LR             : local learning rate (client SGD)
+# MU             : FedProx proximal coefficient μ
+# FRAC_CLIENTS   : fraction of clients sampled each round
+# BATCH_SIZE     : local training batch size
+# DATA_DIR       : where CIFAR-100 is stored/downloaded
+# SEED           : RNG seed for reproducibility
+# USE_CORESET    : if True, train on a subset (coreset) of each client's data
+# CORESET_RATIO  : fraction of each client’s data kept in the coreset
+# CORESET_METHOD : "random" or "craig" (CRAIG-lite)
+# RUN_NAME       : name used for the CSV log file in results/
 # =====================================================
 
-NUM_CLIENTS = int(os.getenv("NUM_CLIENTS", "10"))
-ALPHA = float(os.getenv("ALPHA", "0.5"))
-NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "10"))
-LOCAL_EPOCHS = int(os.getenv("LOCAL_EPOCHS", "1"))
-LR = float(os.getenv("LR", "0.01"))
-MU = float(os.getenv("MU", "0.001"))          # FedProx μ
-FRAC_CLIENTS = float(os.getenv("FRAC_CLIENTS", "0.5"))
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
-DATA_DIR = os.getenv("DATA_DIR", "./data")
-SEED = int(os.getenv("SEED", "42"))
+NUM_CLIENTS   = int(os.getenv("NUM_CLIENTS", "4"))
+ALPHA         = float(os.getenv("ALPHA", "0.5"))
+NUM_ROUNDS    = int(os.getenv("NUM_ROUNDS", "3"))
+LOCAL_EPOCHS  = int(os.getenv("LOCAL_EPOCHS", "1"))
+LR            = float(os.getenv("LR", "0.01"))
+MU            = float(os.getenv("MU", "0.001"))          # FedProx μ
+FRAC_CLIENTS  = float(os.getenv("FRAC_CLIENTS", "0.5"))
+BATCH_SIZE    = int(os.getenv("BATCH_SIZE", "32"))
+DATA_DIR      = os.getenv("DATA_DIR", "./data")
+SEED          = int(os.getenv("SEED", "42"))
 
-USE_CORESET = os.getenv("USE_CORESET", "0") == "1"
-CORESET_RATIO = float(os.getenv("CORESET_RATIO", "0.3"))
-CORESET_METHOD = os.getenv("CORESET_METHOD", "random")
+USE_CORESET     = os.getenv("USE_CORESET", "0") == "1"
+CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))
+CORESET_METHOD  = os.getenv("CORESET_METHOD", "random")
 
-RUN_NAME = os.getenv("RUN_NAME", "fedprox_default")
+RUN_NAME        = os.getenv("RUN_NAME", "fedprox_debug")
+
 # =====================================================
-
 
 
 def main():
     algo_name = "fedprox"
     print(">>> FedProx main() started")
 
+    # results CSV
     os.makedirs("results", exist_ok=True)
-
     csv_path = os.path.join("results", f"{RUN_NAME}.csv")
 
     with open(csv_path, mode="w", newline="") as f:
@@ -63,11 +76,10 @@ def main():
             "test_acc",
         ])
 
-
     # Set seed
     set_seed(SEED)
 
-    # Choose device: CUDA > MPS > CPU
+    # Device
     device = "cuda" if torch.cuda.is_available() else (
         "mps" if torch.backends.mps.is_available() else "cpu"
     )
@@ -95,8 +107,7 @@ def main():
     test_loader = get_test_loader(test_dataset, batch_size=128)
 
     # 4. Initialize global model
-    # If you already swapped get_model to use ResNet via arch="resnet18", you can pass that here:
-    # global_model = get_model(num_classes=100, device=device, arch="resnet18")
+    # you can switch to ResNet via arch="resnet18" if desired
     global_model = get_model(num_classes=100, device=device)
     print("Model initialized.")
 
@@ -121,7 +132,9 @@ def main():
                 full_indices = client_indices[cid]
 
                 if CORESET_METHOD == "random":
-                    coreset_indices = random_coreset(full_indices, ratio=CORESET_RATIO)
+                    coreset_indices = random_coreset(
+                        full_indices, ratio=CORESET_RATIO
+                    )
                 elif CORESET_METHOD == "craig":
                     coreset_indices = craig_like_coreset(
                         global_model,
@@ -179,7 +192,6 @@ def main():
                 test_loss,
                 test_acc,
             ])
-
 
 
 if __name__ == "__main__":
