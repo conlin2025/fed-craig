@@ -20,28 +20,28 @@ from fed.selections import random_coreset, craig_like_coreset
 from fed.datasets import get_loader_from_indices
 
 
-
 # =====================================================
-# 🔧 HYPERPARAMETERS — EDIT THESE VALUES DIRECTLY
-# =====================================================
-
-NUM_CLIENTS = 10            # number of simulated clients
-ALPHA = 0.5                 # Dirichlet concentration; smaller = more non-IID
-NUM_ROUNDS = 10             # communication rounds
-LOCAL_EPOCHS = 1            # local epochs per client per round
-LR = 0.01                   # local learning rate
-MU = 0.001                  # FedProx proximal coefficient
-FRAC_CLIENTS = 0.5          # fraction of clients sampled each round
-BATCH_SIZE = 64             # batch size for local training
-DATA_DIR = "./data"         # where CIFAR-100 is stored/downloaded
-SEED = 42                   # RNG seed for reproducibility
-
-USE_CORESET = True          # True: train on random coreset; False: full client data
-CORESET_RATIO = 0.3         # fraction of each client's data to keep in coreset
-CORESET_METHOD = "craig"   # "random" or "craig"
+# 🔧 HYPERPARAMETERS — CAN BE OVERRIDDEN BY ENV VARS
 # =====================================================
 
-RUN_NAME = "fedprox"
+NUM_CLIENTS = int(os.getenv("NUM_CLIENTS", "10"))
+ALPHA = float(os.getenv("ALPHA", "0.5"))
+NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "10"))
+LOCAL_EPOCHS = int(os.getenv("LOCAL_EPOCHS", "1"))
+LR = float(os.getenv("LR", "0.01"))
+MU = float(os.getenv("MU", "0.001"))          # FedProx μ
+FRAC_CLIENTS = float(os.getenv("FRAC_CLIENTS", "0.5"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
+DATA_DIR = os.getenv("DATA_DIR", "./data")
+SEED = int(os.getenv("SEED", "42"))
+
+USE_CORESET = os.getenv("USE_CORESET", "0") == "1"
+CORESET_RATIO = float(os.getenv("CORESET_RATIO", "0.3"))
+CORESET_METHOD = os.getenv("CORESET_METHOD", "random")
+
+RUN_NAME = os.getenv("RUN_NAME", "fedprox_default")
+# =====================================================
+
 
 
 def main():

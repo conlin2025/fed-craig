@@ -21,27 +21,25 @@ from fed.datasets import get_loader_from_indices
 
 
 # =====================================================
-# 🔧 HYPERPARAMETERS — EDIT for variations
+# 🔧 HYPERPARAMETERS — CAN BE OVERRIDDEN BY ENV VARS
 # =====================================================
 
-NUM_CLIENTS = 10            # how many clients in the federated system
-ALPHA = 0.5                 # Dirichlet non-IID concentration; smaller = more skewed
-#ALPHA = 0.1 Strong non-IID
-#ALPHA = 5.0 Nearly IID
-NUM_ROUNDS = 10             # total communication rounds
-LOCAL_EPOCHS = 1            # epochs each client trains locally per round
-LR = 0.01                   # client learning rate
-FRAC_CLIENTS = 0.5          # fraction of clients selected per round
-BATCH_SIZE = 64             # local training batch size
-DATA_DIR = "./data"         # where CIFAR-100 will download
-SEED = 42                   # reproducibility
+NUM_CLIENTS = int(os.getenv("NUM_CLIENTS", "10"))
+ALPHA = float(os.getenv("ALPHA", "0.5"))
+NUM_ROUNDS = int(os.getenv("NUM_ROUNDS", "10"))
+LOCAL_EPOCHS = int(os.getenv("LOCAL_EPOCHS", "1"))
+LR = float(os.getenv("LR", "0.01"))
+FRAC_CLIENTS = float(os.getenv("FRAC_CLIENTS", "0.5"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
+DATA_DIR = os.getenv("DATA_DIR", "./data")
+SEED = int(os.getenv("SEED", "42"))
 
-USE_CORESET = True        # turn on/off coreset usage
-CORESET_RATIO = 0.3       # 30% of each client's data
-CORESET_METHOD = "craig"   # "random" or "craig"
+USE_CORESET = os.getenv("USE_CORESET", "0") == "1"   # "1" -> True, anything else -> False
+CORESET_RATIO = float(os.getenv("CORESET_RATIO", "0.3"))
+CORESET_METHOD = os.getenv("CORESET_METHOD", "random")  # "random" or "craig"
+
+RUN_NAME = os.getenv("RUN_NAME", "fedavg_default")
 # =====================================================
-
-RUN_NAME = "fedavg" 
 
 
 def main():
