@@ -16,9 +16,7 @@ from fed.datasets import (
 from fed.models import get_model
 from fed.algorithms import local_update_fedprox, aggregate_models
 from fed.utils import evaluate, set_seed
-from fed.selections import random_coreset, craig_like_coreset
-from fed.datasets import get_loader_from_indices
-
+from fed.selections import random_coreset, craig_like_coreset, sieve_streaming_coreset
 
 # =====================================================
 # 🔧 HYPERPARAMETERS — CAN BE OVERRIDDEN BY ENV VARS
@@ -35,9 +33,11 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 SEED = int(os.getenv("SEED", "42"))
 
-USE_CORESET = os.getenv("USE_CORESET", "0") == "1"
-CORESET_RATIO = float(os.getenv("CORESET_RATIO", "0.3"))
-CORESET_METHOD = os.getenv("CORESET_METHOD", "random")
+USE_CORESET     = os.getenv("USE_CORESET", "0") == "1"
+CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))
+CORESET_METHOD  = os.getenv("CORESET_METHOD", "stream") # "random" or "craig" or "stream"
+
+RUN_NAME        = os.getenv("RUN_NAME", "fedprox_debug")
 
 RUN_NAME = os.getenv("RUN_NAME", "fedprox_default")
 # =====================================================
@@ -124,6 +124,15 @@ def main():
                     coreset_indices = random_coreset(full_indices, ratio=CORESET_RATIO)
                 elif CORESET_METHOD == "craig":
                     coreset_indices = craig_like_coreset(
+                        global_model,
+                        train_dataset,
+                        full_indices,
+                        ratio=CORESET_RATIO,
+                        device=device,
+                        batch_size=BATCH_SIZE,
+                    )
+                elif CORESET_METHOD in ("stream"):
+                    coreset_indices = sieve_streaming_coreset(
                         global_model,
                         train_dataset,
                         full_indices,
