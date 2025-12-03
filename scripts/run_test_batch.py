@@ -138,9 +138,8 @@ def main():
     for alpha in ALPHAS:
         for seed in SEEDS:
             for algo, coreset_type, use_coreset in TEST_CONFIGS:
-                all_cfgs.append(
-                    (algo, coreset_type, use_coreset, alpha, seed)
-                )
+                cfg = (algo, coreset_type, use_coreset, alpha, seed)
+                all_cfgs.append(cfg)
 
     print(f"[TEST] Total runs: {len(all_cfgs)}")
     for cfg in all_cfgs:
