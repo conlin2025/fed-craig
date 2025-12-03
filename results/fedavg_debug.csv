@@ -1,0 +1,4 @@
+algo,coreset,alpha,round,test_loss,test_acc
+fedavg,full,0.5,1,4.8482872619628905,0.0264
+fedavg,full,0.5,2,4.061686848449707,0.0977
+fedavg,full,0.5,3,3.649910791015625,0.1626

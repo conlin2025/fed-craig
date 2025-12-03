@@ -1,0 +1,2 @@
+algo,coreset,alpha,round,test_loss,test_acc
+fedprox,forgetting,0.5,1,4.223447351837158,0.0785
