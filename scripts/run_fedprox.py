@@ -16,7 +16,13 @@ from fed.datasets import (
 from fed.models import get_model
 from fed.algorithms import local_update_fedprox, aggregate_models
 from fed.utils import evaluate, set_seed
-from fed.selections import random_coreset, craig_like_coreset
+from fed.selections import (
+    random_coreset,
+    craig_like_coreset,
+    forgetting_coreset,
+    sieve_streaming_coreset,
+)
+
 
 # =====================================================
 # 🔧 HYPERPARAMETER NOTATION
@@ -33,7 +39,7 @@ from fed.selections import random_coreset, craig_like_coreset
 # SEED           : RNG seed for reproducibility
 # USE_CORESET    : if True, train on a subset (coreset) of each client's data
 # CORESET_RATIO  : fraction of each client’s data kept in the coreset
-# CORESET_METHOD : "random" or "craig" (CRAIG-lite)
+# CORESET_METHOD : "random" or "craig" (CRAIG-lite) or "forgetting" or "sieve"
 # RUN_NAME       : name used for the CSV log file in results/
 # =====================================================
 
@@ -51,7 +57,7 @@ SEED          = int(os.getenv("SEED", "42"))
 USE_CORESET     = os.getenv("USE_CORESET", "0") == "1"
 CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))
 CORESET_METHOD  = os.getenv("CORESET_METHOD", "random")
-
+FORGETTING_PATH = os.getenv("FORGETTING_PATH", "./data/forgetting_scores_cifar100.npy")
 RUN_NAME        = os.getenv("RUN_NAME", "fedprox_debug")
 
 # =====================================================
@@ -111,6 +117,18 @@ def main():
     global_model = get_model(num_classes=100, device=device)
     print("Model initialized.")
 
+    # 4.5 Load forgetting scores if needed
+    forget_scores = None
+    if USE_CORESET and CORESET_METHOD == "forgetting":
+        print(f"Loading forgetting scores from: {FORGETTING_PATH}")
+        forget_scores = np.load(FORGETTING_PATH)
+        if forget_scores.shape[0] != len(train_dataset):
+            raise ValueError(
+                f"Forgetting scores length {forget_scores.shape[0]} "
+                f"does not match train dataset size {len(train_dataset)}"
+            )
+        print("Forgetting scores loaded.")
+
     # 5. Federated training loop with FedProx local updates
     for rnd in range(1, NUM_ROUNDS + 1):
         print(f"\n--- FedProx Round {rnd} ---")
@@ -135,6 +153,7 @@ def main():
                     coreset_indices = random_coreset(
                         full_indices, ratio=CORESET_RATIO
                     )
+
                 elif CORESET_METHOD == "craig":
                     coreset_indices = craig_like_coreset(
                         global_model,
@@ -144,6 +163,30 @@ def main():
                         device=device,
                         batch_size=BATCH_SIZE,
                     )
+
+                elif CORESET_METHOD == "forgetting":
+                    if forget_scores is None:
+                        raise RuntimeError(
+                            "forget_scores is None but CORESET_METHOD='forgetting'. "
+                            "Did you run compute_forgetting_scores and set FORGETTING_PATH?"
+                        )
+                    coreset_indices = forgetting_coreset(
+                        full_indices,
+                        forgetting_scores=forget_scores,
+                        ratio=CORESET_RATIO,
+                        pick="high",
+                    )
+
+                elif CORESET_METHOD == "sieve":
+                    coreset_indices = sieve_streaming_coreset(
+                        global_model,
+                        train_dataset,
+                        full_indices,
+                        ratio=CORESET_RATIO,
+                        device=device,
+                        batch_size=BATCH_SIZE,
+                    )
+
                 else:
                     raise ValueError(f"Unknown CORESET_METHOD: {CORESET_METHOD}")
 

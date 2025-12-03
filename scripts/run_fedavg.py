@@ -16,7 +16,13 @@ from fed.datasets import (
 from fed.models import get_model
 from fed.algorithms import local_update_fedavg, aggregate_models
 from fed.utils import evaluate, set_seed
-from fed.selections import random_coreset, craig_like_coreset
+from fed.selections import (
+    random_coreset,
+    craig_like_coreset,
+    forgetting_coreset,
+    sieve_streaming_coreset,
+)
+
 
 
 # =====================================================
@@ -50,7 +56,7 @@ SEED          = int(os.getenv("SEED", "42"))
 USE_CORESET     = os.getenv("USE_CORESET", "0") == "1"        # "1" -> True
 CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))    # half data by default
 CORESET_METHOD  = os.getenv("CORESET_METHOD", "random")       # "random" or "craig"
-
+FORGETTING_PATH = os.getenv("FORGETTING_PATH", "./data/forgetting_scores_cifar100.npy")
 RUN_NAME        = os.getenv("RUN_NAME", "fedavg_debug")
 
 # =====================================================
@@ -109,6 +115,18 @@ def main():
     global_model = get_model(num_classes=100, device=device, arch="resnet18")
     print("Model initialized.")
 
+    # 4.5 Load forgetting scores if needed
+    forget_scores = None
+    if USE_CORESET and CORESET_METHOD == "forgetting":
+        print(f"Loading forgetting scores from: {FORGETTING_PATH}")
+        forget_scores = np.load(FORGETTING_PATH)
+        if forget_scores.shape[0] != len(train_dataset):
+            raise ValueError(
+                f"Forgetting scores length {forget_scores.shape[0]} "
+                f"does not match train dataset size {len(train_dataset)}"
+            )
+        print("Forgetting scores loaded.")
+
     # 5. Federated training loop
     for rnd in range(1, NUM_ROUNDS + 1):
         print(f"\n--- FedAvg Round {rnd} ---")
@@ -134,6 +152,7 @@ def main():
                     coreset_indices = random_coreset(
                         full_indices, ratio=CORESET_RATIO
                     )
+
                 elif CORESET_METHOD == "craig":
                     coreset_indices = craig_like_coreset(
                         global_model,
@@ -143,6 +162,30 @@ def main():
                         device=device,
                         batch_size=BATCH_SIZE,
                     )
+
+                elif CORESET_METHOD == "forgetting":
+                    if forget_scores is None:
+                        raise RuntimeError(
+                            "forget_scores is None but CORESET_METHOD='forgetting'. "
+                            "Did you run compute_forgetting_scores and set FORGETTING_PATH?"
+                        )
+                    coreset_indices = forgetting_coreset(
+                        full_indices,
+                        forgetting_scores=forget_scores,
+                        ratio=CORESET_RATIO,
+                        pick="high",  # or "low" if you want easy examples
+                    )
+
+                elif CORESET_METHOD == "sieve":
+                    coreset_indices = sieve_streaming_coreset(
+                        global_model,
+                        train_dataset,
+                        full_indices,
+                        ratio=CORESET_RATIO,
+                        device=device,
+                        batch_size=BATCH_SIZE,
+                    )
+
                 else:
                     raise ValueError(f"Unknown CORESET_METHOD: {CORESET_METHOD}")
 

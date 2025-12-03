@@ -37,14 +37,18 @@ SEEDS  = [42, 43, 44]      # seeds per config (for averaging)
 #   "full"   : USE_CORESET=False (coreset_ratio ignored)
 #   "random" : random subset
 #   "craig"  : CRAIG-lite feature-based subset
+
+CORESET_RATIO = 0.3  # 30% per-client coreset
+
 CORESET_CONFIGS = [
-    ("fedavg",  "full",   False, 0.0),
-    ("fedavg",  "random", True,  0.3),
-    ("fedavg",  "craig",  True,  0.3),
-    ("fedprox", "full",   False, 0.0),
-    ("fedprox", "random", True,  0.3),
-    ("fedprox", "craig",  True,  0.3),
+    ("fedavg",  "full",       False),
+    ("fedavg",  "forgetting", True),
+    ("fedavg",  "sieve",      True),
+    ("fedprox", "full",       False),
+    ("fedprox", "forgetting", True),
+    ("fedprox", "sieve",      True),
 ]
+
 
 
 def run_experiment(cfg):

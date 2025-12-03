@@ -3,7 +3,7 @@ import os
 # =====================================================
 # 🔧 TINY DEBUG BATCH – for quick sanity checks
 # =====================================================
-# These are intentionally SMALL so you can verify:
+# These are intentionally SMALL to verify:
 # - env var wiring
 # - CSV logging
 # - plotting
