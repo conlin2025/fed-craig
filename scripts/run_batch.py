@@ -29,7 +29,7 @@ BATCH_SIZE    = 64
 DATA_DIR      = "./data"
 
 # Experiment grid:
-ALPHAS = [0.1, 0.5]        # non-IID severity levels to test
+ALPHAS = [0.5]        # non-IID severity levels to test
 SEEDS  = [42, 43, 44]      # seeds per config (for averaging)
 
 # (algo, coreset_type, use_coreset, coreset_ratio)
