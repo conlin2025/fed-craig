@@ -1,2 +1,2 @@
 algo,coreset,alpha,round,test_loss,test_acc
-fedprox,full,0.5,1,4.195635378265381,0.0899
+fedprox,full,0.5,1,4.177336219024658,0.0907
