@@ -22,6 +22,44 @@ def random_coreset(indices, ratio=0.3):
     subset = np.random.choice(indices, k, replace=False)
     return subset.tolist()
 
+def forgetting_coreset(indices, forgetting_scores, ratio=0.3, pick="high"):
+    """
+    Select a coreset based on precomputed forgetting scores.
+
+    Args:
+        indices          : list/array of dataset indices for a client
+        forgetting_scores: 1D NumPy array of shape (N,), where N = len(train_dataset).
+                           forgetting_scores[i] is the forgetting score for sample i.
+        ratio            : fraction of client's local data to keep
+        pick             : "high" -> pick highest-forgetting samples (hard/unstable),
+                           "low"  -> pick lowest-forgetting samples (easy/stable)
+
+    Returns:
+        list of selected dataset indices (subset of 'indices').
+    """
+    if len(indices) == 0:
+        return []
+
+    n = len(indices)
+    k = max(1, int(n * ratio))
+    if k >= n:
+        return list(indices)
+
+    idx_array = np.array(indices)
+    scores = forgetting_scores[idx_array]
+
+    # sort ascending by score
+    order = np.argsort(scores)
+
+    if pick == "high":
+        chosen_local = order[-k:]   # highest forgetting scores
+    elif pick == "low":
+        chosen_local = order[:k]    # lowest forgetting scores
+    else:
+        raise ValueError(f"Unknown pick mode for forgetting_coreset: {pick}")
+
+    selected = idx_array[chosen_local].tolist()
+    return selected
 
 # ----------------------------------------
 # FEATURE-BASED "CRAIG-LITE" CORESETS
