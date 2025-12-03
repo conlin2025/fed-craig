@@ -92,8 +92,10 @@ def main():
         "test_acc",
     ]
 
-    if not os.path.exists(csv_path):
-        with open(csv_path, mode="w", newline="") as f:
+    # Ensure header exists. Use append mode but write header only when file
+    # does not exist or is empty to avoid accidental truncation.
+    if (not os.path.exists(csv_path)) or (os.path.getsize(csv_path) == 0):
+        with open(csv_path, mode="a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(header)
 
@@ -127,10 +129,12 @@ def main():
     )
     test_loader = get_test_loader(test_dataset, batch_size=128)
 
-    # 4. Initialize global model
-    # you can switch to ResNet via arch="resnet18" if desired
-    global_model = get_model(num_classes=100, device=device)
+    # 4. Initialize global model (use same ResNet-18 as FedAvg for parity)
+    global_model = get_model(num_classes=100, device=device, arch="resnet18")
     print("Model initialized.")
+
+    # Print Prox and sieve-related config for easy debugging in Colab
+    print(f"MU={MU}, REDUCE_DIM={REDUCE_DIM}, USE_APPROX_NN={USE_APPROX_NN}")
 
     # 4.5 Load forgetting scores if needed
     forget_scores = None
@@ -145,6 +149,8 @@ def main():
         print("Forgetting scores loaded.")
 
     # 5. Federated training loop with FedProx local updates
+    # Simple per-client feature cache to avoid recomputing features each round
+    feature_cache = {}
     for rnd in range(1, NUM_ROUNDS + 1):
         print(f"\n--- FedProx Round {rnd} ---")
         global_model.train()
@@ -193,6 +199,7 @@ def main():
                     )
 
                 elif CORESET_METHOD == "sieve":
+                    pre_feats = feature_cache.get(cid)
                     coreset_indices = sieve_streaming_coreset(
                         global_model,
                         train_dataset,
@@ -200,9 +207,21 @@ def main():
                         ratio=CORESET_RATIO,
                         device=device,
                         batch_size=BATCH_SIZE,
+                        precomputed_features=pre_feats,
                         reduce_dim=REDUCE_DIM,
                         use_approx_nn=USE_APPROX_NN,
                     )
+                    if pre_feats is None:
+                        from fed.selections import _extract_feature_matrix
+                        feature_cache[cid] = _extract_feature_matrix(
+                            global_model,
+                            train_dataset,
+                            full_indices,
+                            device,
+                            batch_size=BATCH_SIZE,
+                            reduce_dim=None,
+                            random_state=None,
+                        )
 
                 else:
                     raise ValueError(f"Unknown CORESET_METHOD: {CORESET_METHOD}")
@@ -228,7 +247,10 @@ def main():
             )
 
             client_models[cid] = local_model
-            client_weights[cid] = len(client_indices[cid])
+            if USE_CORESET:
+               client_weights[cid] = len(coreset_indices)
+            else:
+               client_weights[cid] = len(client_indices[cid])
 
         # 6. Aggregate client models into new global model
         global_model = aggregate_models(global_model, client_models, client_weights)

@@ -136,6 +136,10 @@ def run_experiment(cfg):
     else:
         raise ValueError(f"Unknown algo: {algo}")
 
+    # Ensure sieve speedup defaults are set if the user didn't provide them
+    os.environ.setdefault("REDUCE_DIM", "128")
+    os.environ.setdefault("USE_APPROX_NN", "1")
+
     print(f"Executing: {cmd}")
     code = os.system(cmd)
     if code != 0:

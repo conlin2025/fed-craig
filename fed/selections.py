@@ -464,7 +464,7 @@ class StreamingCoresetSelector:
         self._y_buffer = None
 
 
-def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=128, reduce_dim: Optional[int] = None, use_approx_nn: Optional[bool] = None):
+def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=128, reduce_dim: Optional[int] = None, use_approx_nn: Optional[bool] = None, precomputed_features: Optional[np.ndarray] = None):
     """
     Wrapper that applies a streaming/apricot-based coreset selection on a client's data.
 
@@ -496,40 +496,44 @@ def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=1
         use_approx_nn=use_approx_nn,
     )
 
-    model.eval()
-    with torch.no_grad():
-        # stream features in micro-batches and pass original dataset ids
-        for start in range(0, N, batch_size):
-            batch_idxs = indices[start:start + batch_size]
-            imgs = [dataset[idx][0] for idx in batch_idxs]
-            if len(imgs) == 0:
-                continue
-            # Try stacking the whole micro-batch; if this OOMs on GPU,
-            # fall back to splitting the micro-batch into smaller chunks.
-            try:
-                batch_x = torch.stack(imgs).to(device)
-                out = model(batch_x)
-            except RuntimeError as e:
-                msg = str(e).lower()
-                if 'out of memory' in msg or 'cuda' in msg:
-                    try:
-                        # free cache and process in smaller sub-batches
-                        if device.startswith('cuda'):
-                            torch.cuda.empty_cache()
-                    except Exception:
-                        pass
-                    outputs = []
-                    # choose a small sub-batch size to be safe
-                    sub_bs = max(1, min(32, max(1, len(imgs) // 4)))
-                    for s in range(0, len(imgs), sub_bs):
-                        bx = torch.stack(imgs[s:s + sub_bs]).to(device)
-                        out_b = model(bx)
-                        outputs.append(out_b.cpu())
-                    out = torch.cat(outputs, dim=0)
-                else:
-                    raise
-            feats = out.cpu().numpy()
-            selector.partial_fit_on_batch_with_ids(feats, id_batch=np.array(batch_idxs), y_batch=None)
+    if precomputed_features is not None and precomputed_features.shape[0] == N:
+        # Use cached features directly
+        selector.partial_fit_on_batch_with_ids(precomputed_features, id_batch=np.array(indices), y_batch=None)
+    else:
+        model.eval()
+        with torch.no_grad():
+            # stream features in micro-batches and pass original dataset ids
+            for start in range(0, N, batch_size):
+                batch_idxs = indices[start:start + batch_size]
+                imgs = [dataset[idx][0] for idx in batch_idxs]
+                if len(imgs) == 0:
+                    continue
+                # Try stacking the whole micro-batch; if this OOMs on GPU,
+                # fall back to splitting the micro-batch into smaller chunks.
+                try:
+                    batch_x = torch.stack(imgs).to(device)
+                    out = model(batch_x)
+                except RuntimeError as e:
+                    msg = str(e).lower()
+                    if 'out of memory' in msg or 'cuda' in msg:
+                        try:
+                            # free cache and process in smaller sub-batches
+                            if device.startswith('cuda'):
+                                torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+                        outputs = []
+                        # choose a small sub-batch size to be safe
+                        sub_bs = max(1, min(32, max(1, len(imgs) // 4)))
+                        for s in range(0, len(imgs), sub_bs):
+                            bx = torch.stack(imgs[s:s + sub_bs]).to(device)
+                            out_b = model(bx)
+                            outputs.append(out_b.cpu())
+                        out = torch.cat(outputs, dim=0)
+                    else:
+                        raise
+                feats = out.cpu().numpy()
+                selector.partial_fit_on_batch_with_ids(feats, id_batch=np.array(batch_idxs), y_batch=None)
 
     X_core, _, id_core = selector.get_coreset()
     selected = []

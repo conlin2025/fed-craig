@@ -149,6 +149,8 @@ def run_experiment(cfg):
     else:
         raise ValueError(f"Unknown algo: {algo}")
 
+    os.environ.setdefault("REDUCE_DIM", "128")
+    os.environ.setdefault("USE_APPROX_NN", "1")
     print(f"[EXEC] {cmd}")
     code = os.system(cmd)
     if code != 0:
@@ -157,6 +159,7 @@ def run_experiment(cfg):
 
 def main():
     maybe_clear_results()
+    maybe_compute_forgetting_scores()
 
 
     all_cfgs = []
