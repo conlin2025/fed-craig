@@ -106,10 +106,10 @@ def main():
     all_cfgs = []
     for alpha in ALPHAS:
         for seed in SEEDS:
-            for algo, coreset_type, use_coreset, coreset_ratio in CORESET_CONFIGS:
-                all_cfgs.append(
-                    (algo, coreset_type, alpha, seed, use_coreset, coreset_ratio)
-                )
+            for algo, coreset_type, use_coreset in CORESET_CONFIGS:
+                # use global CORESET_RATIO when the config requests a coreset
+                coreset_ratio = CORESET_RATIO if use_coreset else 0.0
+                all_cfgs.append((algo, coreset_type, alpha, seed, use_coreset, coreset_ratio))
 
     print(f"Total runs to execute: {len(all_cfgs)}")
     for cfg in all_cfgs:
