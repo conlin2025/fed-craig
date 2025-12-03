@@ -20,7 +20,7 @@ FRAC_CLIENTS  = 0.5
 BATCH_SIZE    = 64
 DATA_DIR      = "./data"
 
-ALPHAS        = [0.1, 0.5]     # non-IID severity
+ALPHAS        = [0.5]     # non-IID severity
 SEEDS         = [42, 43, 44]   # seeds per config
 CORESET_RATIO = 0.3            # 30% coresets
 # =====================================================
