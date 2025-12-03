@@ -20,7 +20,7 @@ FRAC_CLIENTS  = 0.5
 BATCH_SIZE    = 64
 DATA_DIR      = "./data"
 
-ALPHAS        = [0.5]     # non-IID severity
+ALPHAS        = [0.1, 0.5]     # non-IID severity
 SEEDS         = [42, 43, 44]   # seeds per config
 CORESET_RATIO = 0.3            # 30% coresets
 # =====================================================
@@ -123,15 +123,9 @@ def main():
     for alpha in ALPHAS:
         for seed in SEEDS:
             for algo, coreset_type, use_coreset in CORESET_CONFIGS:
-<<<<<<< HEAD
-                # use global CORESET_RATIO when the config requests a coreset
-                coreset_ratio = CORESET_RATIO if use_coreset else 0.0
-                all_cfgs.append((algo, coreset_type, alpha, seed, use_coreset, coreset_ratio))
-=======
                 all_cfgs.append(
                     (algo, coreset_type, alpha, seed, use_coreset)
                 )
->>>>>>> acf4461 (update plot_automated)
 
     print(f"Total runs to execute: {len(all_cfgs)}")
     for cfg in all_cfgs:
