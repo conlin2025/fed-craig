@@ -68,6 +68,32 @@ def maybe_plot_after():
         print("[WARN] Failed to run plot_avg_results:", e)
 
 
+def maybe_compute_forgetting_scores():
+    """If any configured experiment uses the 'forgetting' coreset, compute
+    forgetting scores first (runs scripts/compute_forgetting_scores.py).
+    This is done once before launching the batch of experiments.
+    """
+    needs_forgetting = any(
+        (coreset_type == "forgetting" and use_coreset)
+        for _, coreset_type, use_coreset in CORESET_CONFIGS
+    )
+    if not needs_forgetting:
+        print("[INFO] No forgetting-based runs found; skipping forgetting score computation")
+        return
+
+    print("[INFO] Found forgetting-based runs — computing forgetting scores now...")
+    try:
+        # prefer import + call to avoid spawning a shell; fallback to os.system if that fails
+        from scripts.compute_forgetting_scores import main as compute_main
+        compute_main()
+    except Exception as e:
+        print("[WARN] Direct import of compute_forgetting_scores failed:", e)
+        print("[INFO] Falling back to running as a module...")
+        code = os.system("python -m scripts.compute_forgetting_scores")
+        if code != 0:
+            raise RuntimeError(f"compute_forgetting_scores failed with exit code {code}")
+
+
 def run_experiment(cfg):
     """
     cfg = (algo, coreset_type, alpha, seed, use_coreset)
@@ -118,6 +144,7 @@ def run_experiment(cfg):
 
 def main():
     maybe_clear_results()
+    maybe_compute_forgetting_scores()
 
     all_cfgs = []
     for alpha in ALPHAS:

@@ -58,6 +58,17 @@ CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))    # half data by def
 CORESET_METHOD  = os.getenv("CORESET_METHOD", "random")       # "random" or "craig"
 FORGETTING_PATH = os.getenv("FORGETTING_PATH", "./data/forgetting_scores_cifar100.npy")
 RUN_NAME        = os.getenv("RUN_NAME", "fedavg_debug")
+# Optional speedup flags for sieve selector (env vars)
+# REDUCE_DIM: int (e.g. 256) -> apply random projection to this many dimensions
+# USE_APPROX_NN: "1" to force Annoy-based approximate NN, "0" to force exact NN,
+#               unset -> leave selector default (selector will enable Annoy by default)
+REDUCE_DIM_RAW = os.getenv("REDUCE_DIM", "")
+REDUCE_DIM = int(REDUCE_DIM_RAW) if REDUCE_DIM_RAW != "" else None
+USE_APPROX_NN_RAW = os.getenv("USE_APPROX_NN", "")
+if USE_APPROX_NN_RAW == "":
+    USE_APPROX_NN = None
+else:
+    USE_APPROX_NN = USE_APPROX_NN_RAW == "1"
 
 # =====================================================
 
@@ -66,20 +77,25 @@ def main():
     algo_name = "fedavg"
     print(">>> FedAvg main() started")
 
-    # Create results directory + CSV
+    # Create results directory and ensure CSV header exists.
     os.makedirs("results", exist_ok=True)
     csv_path = os.path.join("results", f"{RUN_NAME}.csv")
 
-    with open(csv_path, mode="w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "algo",          # fedavg or fedprox
-            "coreset",       # full, random, craig, etc.
-            "alpha",         # Dirichlet alpha
-            "round",
-            "test_loss",
-            "test_acc",
-        ])
+    # Only write the header if the CSV does not already exist. This avoids
+    # accidentally overwriting previous runs when the same RUN_NAME is used.
+    header = [
+        "algo",          # fedavg or fedprox
+        "coreset",       # full, random, craig, etc.
+        "alpha",         # Dirichlet alpha
+        "round",
+        "test_loss",
+        "test_acc",
+    ]
+
+    if not os.path.exists(csv_path):
+        with open(csv_path, mode="w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
 
     # Set seed
     set_seed(SEED)
@@ -184,6 +200,8 @@ def main():
                         ratio=CORESET_RATIO,
                         device=device,
                         batch_size=BATCH_SIZE,
+                        reduce_dim=REDUCE_DIM,
+                        use_approx_nn=USE_APPROX_NN,
                     )
 
                 else:

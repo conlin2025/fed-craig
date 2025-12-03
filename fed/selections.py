@@ -3,6 +3,8 @@ import torch
 
 from apricot import FeatureBasedSelection, FacilityLocationSelection
 from sklearn.neighbors import NearestNeighbors
+from sklearn.random_projection import SparseRandomProjection
+from annoy import AnnoyIndex
 from typing import Optional, Any, Tuple
 
 # ----------------------------------------
@@ -65,7 +67,7 @@ def forgetting_coreset(indices, forgetting_scores, ratio=0.3, pick="high"):
 # FEATURE-BASED "CRAIG-LITE" CORESETS
 # ----------------------------------------
 
-def _extract_feature_matrix(model, dataset, indices, device, batch_size=128):
+def _extract_feature_matrix(model, dataset, indices, device, batch_size=128, reduce_dim: Optional[int] = None, random_state: Optional[int] = None):
     """
     Extract feature vectors (here: logits) for given indices using the current model.
     Returns a NumPy array of shape (N, D).
@@ -83,16 +85,48 @@ def _extract_feature_matrix(model, dataset, indices, device, batch_size=128):
                 imgs.append(x)
             if not imgs:
                 continue
-            batch_x = torch.stack(imgs).to(device)
-            out = model(batch_x)          # shape: (B, num_classes)
-            feats.append(out.cpu())
+            # try full micro-batch first, fallback to smaller chunks on OOM
+            try:
+                batch_x = torch.stack(imgs).to(device)
+                out = model(batch_x)          # shape: (B, num_classes)
+                feats.append(out.cpu())
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if 'out of memory' in msg or 'cuda' in msg:
+                    try:
+                        if device.startswith('cuda'):
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    # process in smaller sub-batches to avoid OOM
+                    sub_outputs = []
+                    sub_bs = max(1, min(64, max(1, len(imgs) // 4)))
+                    for s in range(0, len(imgs), sub_bs):
+                        bx = torch.stack(imgs[s:s + sub_bs]).to(device)
+                        out_b = model(bx)
+                        sub_outputs.append(out_b.cpu())
+                    feats.append(torch.cat(sub_outputs, dim=0))
+                else:
+                    raise
 
     if len(feats) == 0:
         # fallback: no data
         return np.zeros((0, 1), dtype=np.float32)
 
     feats = torch.cat(feats, dim=0)      # (N, D)
-    return feats.numpy()
+    X = feats.numpy()
+
+    # Optional: reduce dimensionality using a fast random projection to
+    # speed up downstream selection and nearest-neighbor computations.
+    if reduce_dim is not None and reduce_dim > 0 and X.shape[1] > reduce_dim:
+        proj = SparseRandomProjection(n_components=reduce_dim, random_state=random_state)
+        try:
+            X = proj.fit_transform(X)
+        except Exception:
+            # fallback to original features if projection fails
+            pass
+
+    return X
 
 
 def _kmeans_select_indices(indices, features, k, num_iters=10):
@@ -173,13 +207,7 @@ def craig_like_coreset(model, dataset, indices, ratio, device, batch_size=128):
 
 
 class StreamingCoresetSelector:
-    """Lightweight streaming coreset helper around apricot selectors.
-
-    It's meant to be easy to drop into a client: feed features (optionally
-    with original ids) via the ``partial_fit_*`` helpers and call
-    ``get_coreset()`` to retrieve the selected subset. Internals use a small
-    buffer that is trimmed with apricot when it grows too big.
-    """
+    """Lightweight streaming coreset helper around apricot selectors"""
 
     def __init__(self,
                  n_samples: int,
@@ -187,7 +215,9 @@ class StreamingCoresetSelector:
                  metric: str = 'euclidean',
                  optimizer: str = 'lazy',
                  random_state: Optional[int] = None,
-                 buffer_size: int = 10000):
+                 buffer_size: int = 10000,
+                 reduce_dim: Optional[int] = None,
+                 use_approx_nn: Optional[bool] = None):
 
         # basic config
         self.n_samples = int(n_samples)
@@ -196,6 +226,14 @@ class StreamingCoresetSelector:
         self.optimizer = optimizer
         self.random_state = random_state
         self.buffer_size = int(buffer_size)
+        # optional feature reduction for speed (int) and whether to use Annoy
+        # for approximate nearest neighbors when mapping back to indices.
+        self.reduce_dim = int(reduce_dim) if reduce_dim is not None else None
+
+        if use_approx_nn is None:
+            self.use_approx_nn = True
+        else:
+            self.use_approx_nn = bool(use_approx_nn)
 
         # choose the apricot selector
         if method == 'feature':
@@ -288,12 +326,44 @@ class StreamingCoresetSelector:
         except Exception:
             X_for_apricot = X
 
-        X_sub = self.selector.fit_transform(X_for_apricot)
+        # Optionally reduce feature dimensionality for apricot and NN mapping.
+        X_for_sel = X_for_apricot
+        projector = None
+        if self.reduce_dim is not None and X_for_sel.shape[1] > self.reduce_dim:
+            try:
+                projector = SparseRandomProjection(n_components=self.reduce_dim, random_state=self.random_state)
+                X_for_sel = projector.fit_transform(X_for_sel)
+            except Exception:
+                projector = None
 
-        # map back to original rows via nearest neighbor
-        nn = NearestNeighbors(n_neighbors=1).fit(X)
-        dists, idxs = nn.kneighbors(X_sub, return_distance=True)
-        idxs = idxs.ravel()
+        X_sub = self.selector.fit_transform(X_for_sel)
+
+        # map back to original rows via nearest neighbor. If we projected, map
+        # using the same projection space so nearest neighbors are meaningful.
+        if projector is not None:
+            X_nn = X_for_sel
+            X_sub_nn = X_sub
+        else:
+            X_nn = X
+            X_sub_nn = X_sub
+
+        idxs = None
+        if self.use_approx_nn:
+            # Use Annoy for approximate nearest neighbors if available.
+            try:
+                dim = X_nn.shape[1]
+                t = AnnoyIndex(dim, 'euclidean')
+                for i, v in enumerate(X_nn.astype(np.float32)):
+                    t.add_item(i, v.tolist())
+                t.build(20)
+                idxs = np.array([t.get_nns_by_vector(v.tolist(), 1)[0] for v in X_sub_nn.astype(np.float32)])
+            except Exception:
+                idxs = None
+
+        if idxs is None:
+            nn = NearestNeighbors(n_neighbors=1).fit(X_nn)
+            dists, idxs = nn.kneighbors(X_sub_nn, return_distance=True)
+            idxs = idxs.ravel()
 
         # keep unique (preserve order)
         unique_idxs = []
@@ -337,11 +407,40 @@ class StreamingCoresetSelector:
         except Exception:
             X_for_apricot = X
 
-        X_sub = self.selector.fit_transform(X_for_apricot)
+        # apply optional projection
+        X_for_sel = X_for_apricot
+        projector = None
+        if self.reduce_dim is not None and X_for_sel.shape[1] > self.reduce_dim:
+            try:
+                projector = SparseRandomProjection(n_components=self.reduce_dim, random_state=self.random_state)
+                X_for_sel = projector.fit_transform(X_for_sel)
+            except Exception:
+                projector = None
 
-        nn = NearestNeighbors(n_neighbors=1).fit(X)
-        _, idxs = nn.kneighbors(X_sub, return_distance=True)
-        idxs = idxs.ravel()
+        X_sub = self.selector.fit_transform(X_for_sel)
+
+        if projector is not None:
+            X_nn = X_for_sel
+            X_sub_nn = X_sub
+        else:
+            X_nn = X
+            X_sub_nn = X_sub
+
+        idxs = None
+        if self.use_approx_nn:
+            try:
+                dim = X_nn.shape[1]
+                t = AnnoyIndex(dim, 'euclidean')
+                for i, v in enumerate(X_nn.astype(np.float32)):
+                    t.add_item(i, v.tolist())
+                t.build(20)
+                idxs = np.array([t.get_nns_by_vector(v.tolist(), 1)[0] for v in X_sub_nn.astype(np.float32)])
+            except Exception:
+                idxs = None
+
+        if idxs is None:
+            _, idxs = NearestNeighbors(n_neighbors=1).fit(X_nn).kneighbors(X_sub_nn, return_distance=True)
+            idxs = idxs.ravel()
 
         unique_idxs = []
         seen = set()
@@ -365,7 +464,7 @@ class StreamingCoresetSelector:
         self._y_buffer = None
 
 
-def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=128):
+def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=128, reduce_dim: Optional[int] = None, use_approx_nn: Optional[bool] = None):
     """
     Wrapper that applies a streaming/apricot-based coreset selection on a client's data.
 
@@ -387,7 +486,15 @@ def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=1
     if N == 0:
         return []
 
-    selector = StreamingCoresetSelector(n_samples=k, method='feature', buffer_size=max(2000, 10 * k))
+    # If user doesn't specify use_approx_nn, let the selector decide (Annoy
+    # auto-enabled if installed).
+    selector = StreamingCoresetSelector(
+        n_samples=k,
+        method='feature',
+        buffer_size=max(2000, 10 * k),
+        reduce_dim=reduce_dim,
+        use_approx_nn=use_approx_nn,
+    )
 
     model.eval()
     with torch.no_grad():
@@ -397,8 +504,30 @@ def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=1
             imgs = [dataset[idx][0] for idx in batch_idxs]
             if len(imgs) == 0:
                 continue
-            batch_x = torch.stack(imgs).to(device)
-            out = model(batch_x)
+            # Try stacking the whole micro-batch; if this OOMs on GPU,
+            # fall back to splitting the micro-batch into smaller chunks.
+            try:
+                batch_x = torch.stack(imgs).to(device)
+                out = model(batch_x)
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if 'out of memory' in msg or 'cuda' in msg:
+                    try:
+                        # free cache and process in smaller sub-batches
+                        if device.startswith('cuda'):
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    outputs = []
+                    # choose a small sub-batch size to be safe
+                    sub_bs = max(1, min(32, max(1, len(imgs) // 4)))
+                    for s in range(0, len(imgs), sub_bs):
+                        bx = torch.stack(imgs[s:s + sub_bs]).to(device)
+                        out_b = model(bx)
+                        outputs.append(out_b.cpu())
+                    out = torch.cat(outputs, dim=0)
+                else:
+                    raise
             feats = out.cpu().numpy()
             selector.partial_fit_on_batch_with_ids(feats, id_batch=np.array(batch_idxs), y_batch=None)
 
@@ -420,11 +549,10 @@ def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=1
 
     # Fallback: if selector did not yield ids (unexpected), extract features fully and map
     if len(selected) < k:
-        features = _extract_feature_matrix(model, dataset, indices, device, batch_size)
+        features = _extract_feature_matrix(model, dataset, indices, device, batch_size, reduce_dim=reduce_dim, random_state=None)
         if features.shape[0] == 0:
             return indices[:]
-
-        selector_full = StreamingCoresetSelector(n_samples=k, method='feature', buffer_size=max(2000, 10 * k))
+        selector_full = StreamingCoresetSelector(n_samples=k, method='feature', buffer_size=max(2000, 10 * k), reduce_dim=reduce_dim, use_approx_nn=use_approx_nn)
         selector_full.partial_fit_on_batch(features, None)
         X_core_full, _, _ = selector_full.get_coreset()
         if X_core_full is None:
@@ -436,9 +564,25 @@ def sieve_streaming_coreset(model, dataset, indices, ratio, device, batch_size=1
             selected.extend(extra)
             return selected
 
-        nn = NearestNeighbors(n_neighbors=1).fit(features)
-        _, idxs = nn.kneighbors(X_core_full, return_distance=True)
-        idxs = idxs.ravel().tolist()
+        # Use Annoy for approximate NN mapping if requested and available;
+        # otherwise fall back to exact sklearn NearestNeighbors.
+        if use_approx_nn:
+            try:
+                dim = features.shape[1]
+                t = AnnoyIndex(dim, 'euclidean')
+                for i, v in enumerate(features.astype(np.float32)):
+                    t.add_item(i, v.tolist())
+                t.build(20)
+                idxs = [t.get_nns_by_vector(v.tolist(), 1)[0] for v in X_core_full.astype(np.float32)]
+            except Exception:
+                # fallback to exact NN if Annoy fails for some reason
+                nn = NearestNeighbors(n_neighbors=1).fit(features)
+                _, idxs = nn.kneighbors(X_core_full, return_distance=True)
+                idxs = idxs.ravel().tolist()
+        else:
+            nn = NearestNeighbors(n_neighbors=1).fit(features)
+            _, idxs = nn.kneighbors(X_core_full, return_distance=True)
+            idxs = idxs.ravel().tolist()
         seen = set()
         for ii in idxs:
             if ii not in seen:
