@@ -43,12 +43,12 @@ CORESET_RATIO = 0.5      # each coreset half of the tiny dataset
 
 # Methods to test
 TEST_CONFIGS = [
-    # ("fedavg",  "full",       False),
-    # ("fedavg",  "forgetting", True),
+    ("fedavg",  "full",       False),
+    ("fedavg",  "forgetting", True),
     ("fedavg",  "sieve",      True),
 
-    # ("fedprox", "full",       False),
-    # ("fedprox", "forgetting", True),
+    ("fedprox", "full",       False),
+    ("fedprox", "forgetting", True),
     ("fedprox", "sieve",      True),
 ]
 
