@@ -135,14 +135,12 @@ def craig_like_coreset(model, dataset, indices, ratio, device, batch_size=128):
 
 
 class StreamingCoresetSelector:
-    """
-    Wrapper around apricot selectors for batch/streaming coreset selection.
+    """Lightweight streaming coreset helper around apricot selectors.
 
-    Usage:
-      selector = StreamingCoresetSelector(n_samples=500, method='feature', buffer_size=5000)
-      selector.partial_fit_on_batch(X_batch, y_batch)
-      # optionally, repeatedly
-      X_core, y_core = selector.get_coreset()
+    It's meant to be easy to drop into a client: feed features (optionally
+    with original ids) via the ``partial_fit_*`` helpers and call
+    ``get_coreset()`` to retrieve the selected subset. Internals use a small
+    buffer that is trimmed with apricot when it grows too big.
     """
 
     def __init__(self,
@@ -153,6 +151,7 @@ class StreamingCoresetSelector:
                  random_state: Optional[int] = None,
                  buffer_size: int = 10000):
 
+        # basic config
         self.n_samples = int(n_samples)
         self.method = method
         self.metric = metric
@@ -160,6 +159,7 @@ class StreamingCoresetSelector:
         self.random_state = random_state
         self.buffer_size = int(buffer_size)
 
+        # choose the apricot selector
         if method == 'feature':
             self.selector = FeatureBasedSelection(self.n_samples,
                                                    optimizer=optimizer,
@@ -172,15 +172,13 @@ class StreamingCoresetSelector:
         else:
             raise ValueError(f"Unknown method: {method}")
 
-        # Internal buffers
+        # buffers for features / labels / original ids
         self._X_buffer: Optional[np.ndarray] = None
         self._y_buffer: Optional[np.ndarray] = None
+        self._id_buffer = None
 
     def partial_fit_on_batch(self, X_batch: np.ndarray, y_batch: Optional[np.ndarray] = None) -> None:
-        """
-        Add a batch of examples to the internal buffer. If the buffer exceeds
-        `buffer_size`, reduce it by selecting `n_samples` from the buffer using apricot.
-        """
+        """Add a batch of feature vectors. Trim the buffer with apricot when needed."""
         Xb = np.asarray(X_batch)
         if Xb.ndim != 2:
             Xb = Xb.reshape((Xb.shape[0], -1))
@@ -189,8 +187,6 @@ class StreamingCoresetSelector:
             self._X_buffer = Xb.copy()
             if y_batch is not None:
                 self._y_buffer = np.asarray(y_batch).copy()
-            # initialize id buffer as None (can be set via partial_fit with ids)
-            self._id_buffer = None
         else:
             self._X_buffer = np.concatenate([self._X_buffer, Xb], axis=0)
             if y_batch is not None:
@@ -200,24 +196,16 @@ class StreamingCoresetSelector:
                 else:
                     self._y_buffer = np.concatenate([self._y_buffer, yb], axis=0)
 
-        # If buffer too large, reduce it using apricot to keep memory bounded.
         if self._X_buffer.shape[0] > self.buffer_size:
             self._reduce_buffer()
 
     def partial_fit_on_stream(self, stream, batch_size: int = 1024):
-        """
-        Convenience: consume an iterator/generator that yields (X_batch, y_batch)
-        pairs and call `partial_fit_on_batch` repeatedly.
-        """
+        """Consume an iterator that yields (X_batch, y_batch) and feed batches."""
         for Xb, yb in stream:
             self.partial_fit_on_batch(Xb, yb)
 
     def partial_fit_on_batch_with_ids(self, X_batch: np.ndarray, id_batch: np.ndarray, y_batch: Optional[np.ndarray] = None) -> None:
-        """
-        Like `partial_fit_on_batch` but also accepts a parallel array of ids
-        (e.g., original dataset indices) which are stored alongside features.
-        This allows mapping selected features back to original indices.
-        """
+        """Like ``partial_fit_on_batch`` but track original dataset ids alongside features."""
         Xb = np.asarray(X_batch)
         if Xb.ndim != 2:
             Xb = Xb.reshape((Xb.shape[0], -1))
@@ -232,7 +220,6 @@ class StreamingCoresetSelector:
         else:
             self._X_buffer = np.concatenate([self._X_buffer, Xb], axis=0)
             if self._id_buffer is None:
-                # previously no ids; create placeholder sequential ids
                 prev_n = self._X_buffer.shape[0] - Xb.shape[0]
                 self._id_buffer = np.arange(prev_n)
             self._id_buffer = np.concatenate([self._id_buffer, ids], axis=0)
@@ -247,25 +234,30 @@ class StreamingCoresetSelector:
             self._reduce_buffer()
 
     def _reduce_buffer(self):
-        """
-        Run apricot selection on the buffer and reduce the buffer to the
-        selected `n_samples` points (or all points if smaller).
-        """
+        """When the buffer grows too large, run apricot and keep the selected rows."""
         X = self._X_buffer
         y = self._y_buffer
         n = X.shape[0]
         if n <= self.n_samples:
             return
 
-        # Fit and transform to get selected subset (apricot returns selected X)
-        X_sub = self.selector.fit_transform(X)
+        # apricot wants non-mixed-sign features. If mixed, shift to non-negative.
+        X_for_apricot = X
+        try:
+            if np.any(X_for_apricot < 0) and np.any(X_for_apricot > 0):
+                min_val = float(X_for_apricot.min())
+                X_for_apricot = X_for_apricot - min_val
+        except Exception:
+            X_for_apricot = X
 
-        # Map selected rows back to buffer indices via nearest-neighbor (robust)
+        X_sub = self.selector.fit_transform(X_for_apricot)
+
+        # map back to original rows via nearest neighbor
         nn = NearestNeighbors(n_neighbors=1).fit(X)
         dists, idxs = nn.kneighbors(X_sub, return_distance=True)
         idxs = idxs.ravel()
 
-        # Keep unique indices in original order
+        # keep unique (preserve order)
         unique_idxs = []
         seen = set()
         for ii in idxs:
@@ -280,7 +272,6 @@ class StreamingCoresetSelector:
         if y is not None:
             new_y = y[unique_idxs]
 
-        # also slice id buffer if available
         new_ids = None
         if hasattr(self, '_id_buffer') and self._id_buffer is not None:
             new_ids = np.asarray(self._id_buffer)[unique_idxs]
@@ -290,25 +281,30 @@ class StreamingCoresetSelector:
         self._id_buffer = new_ids
 
     def get_coreset(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
-        """
-        Run the selector on all accumulated data and return the coreset (X_core, y_core).
-        If no data buffered, returns (None, None).
+        """Run selector on buffered data and return (X_core, y_core, id_core).
+
+        Returns None if there's no data.
         """
         if self._X_buffer is None:
-            return None, None
+            return None, None, None
 
         X = self._X_buffer
         y = self._y_buffer
 
-        # If buffer size is small, selection will return subset directly.
-        X_sub = self.selector.fit_transform(X)
+        X_for_apricot = X
+        try:
+            if np.any(X_for_apricot < 0) and np.any(X_for_apricot > 0):
+                min_val = float(X_for_apricot.min())
+                X_for_apricot = X_for_apricot - min_val
+        except Exception:
+            X_for_apricot = X
 
-        # Map back to indices and return X_sub and corresponding y_sub if available.
+        X_sub = self.selector.fit_transform(X_for_apricot)
+
         nn = NearestNeighbors(n_neighbors=1).fit(X)
         _, idxs = nn.kneighbors(X_sub, return_distance=True)
         idxs = idxs.ravel()
 
-        # Deduplicate and cap to n_samples
         unique_idxs = []
         seen = set()
         for ii in idxs:
@@ -326,7 +322,7 @@ class StreamingCoresetSelector:
         return X_core, y_core, id_core
 
     def clear_buffer(self):
-        """Clear internal buffers (if needed)."""
+        """Reset buffers."""
         self._X_buffer = None
         self._y_buffer = None
 

@@ -113,6 +113,16 @@ experiments = [
         "coreset_ratio": 0.3,
         "seed": 64,
     },
+    # --- FedAvg, streaming (sieve-like) coreset 30%, single test run ---
+    {
+        "algo": "fedavg",
+        "run_name": "fedavg_stream_0_3_seed1",
+        "alpha": 0.5,
+        "use_coreset": True,
+        "coreset_method": "stream",
+        "coreset_ratio": 0.3,
+        "seed": 72,
+    },
 ]
 
 # Global defaults (you can tune once here)

@@ -11,6 +11,7 @@ from fed.datasets import (
     dirichlet_partition,
     get_client_loaders,
     get_test_loader,
+    get_loader_from_indices,
 )
 from fed.models import get_model
 from fed.algorithms import local_update_fedavg, aggregate_models
@@ -32,7 +33,7 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "64"))
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 SEED = int(os.getenv("SEED", "42"))
 
-USE_CORESET     = os.getenv("USE_CORESET", "0") == "1"        # "1" -> True
+USE_CORESET     = os.getenv("USE_CORESET", "1") == "1"        # "1" -> True
 CORESET_RATIO   = float(os.getenv("CORESET_RATIO", "0.5"))    # half data by default
 CORESET_METHOD  = os.getenv("CORESET_METHOD", "stream")       # "random" or "craig" or "stream"
 
@@ -147,13 +148,25 @@ def main():
             else:
                 loader = client_loaders[cid]
 
+            # Perform local FedAvg update on this client's data
+            local_model = local_update_fedavg(
+                global_model,
+                loader,
+                device=device,
+                epochs=LOCAL_EPOCHS,
+                lr=LR,
+            )
+
+            client_models[cid] = local_model
+            client_weights[cid] = len(client_indices[cid])
+
 
         # 6. Aggregate
         global_model = aggregate_models(global_model, client_models, client_weights)
 
         # 7. Evaluation
         test_loss, test_acc = evaluate(global_model, test_loader, device)
-        print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.4f}")
+        print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.5f}")
 
         # Determine coreset label
         if not USE_CORESET:

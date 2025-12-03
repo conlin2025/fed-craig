@@ -96,8 +96,8 @@ def main():
 
     # 4. Initialize global model
     # If you already swapped get_model to use ResNet via arch="resnet18", you can pass that here:
-    # global_model = get_model(num_classes=100, device=device, arch="resnet18")
-    global_model = get_model(num_classes=100, device=device)
+    global_model = get_model(num_classes=100, device=device, arch="resnet18")
+    # global_model = get_model(num_classes=100, device=device)
     print("Model initialized.")
 
     # 5. Federated training loop with FedProx local updates
@@ -171,7 +171,7 @@ def main():
 
         # 7. Evaluate on global test set
         test_loss, test_acc = evaluate(global_model, test_loader, device)
-        print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.4f}")
+        print(f"Round {rnd}: test loss = {test_loss:.4f}, test acc = {test_acc:.5f}")
 
         if not USE_CORESET:
             coreset_label = "full"
