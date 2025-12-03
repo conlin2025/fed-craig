@@ -11,8 +11,8 @@ RESULTS_DIR = "results"
 # ================================
 # None means "no filter" (include all)
 FILTER_ALGOS = ["fedavg", "fedprox"]        # ["fedavg"], ["fedprox"], or None
-FILTER_CORESETS = ["full", "random", "craig"]  # subset or None
-FILTER_ALPHAS = [0.1, 0.5]                  # [0.5], [0.1], or None
+FILTER_CORESETS = ["full", "forgetting", "sieve"]  # subset or None
+FILTER_ALPHAS = [0.5]                  # [0.5], [0.1], or None
 # ================================
 
 
