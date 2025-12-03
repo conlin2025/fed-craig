@@ -1,5 +1,12 @@
 # scripts/run_test_batch.py
+
+"""
+Run + clear results + auto-plot:
+CLEAR_RESULTS=1 PLOT_AFTER=1 python -m scripts.run_test_batch
+"""
+
 import os
+import glob
 
 """
 Tiny sanity-check batch.
@@ -12,8 +19,11 @@ Runs:
     fedprox - sieve
 
 Tiny settings → fast debugging.
-"""
 
+Environment flags:
+    CLEAR_RESULTS=1  -> remove old results/*.csv and results/avg_comparison.png
+    PLOT_AFTER=1     -> automatically call scripts.plot_avg_results at the end
+"""
 
 # =====================================================
 # 🔧 SUPER SMALL DEBUG-FRIENDLY SETTINGS
@@ -31,10 +41,7 @@ SEEDS         = [0]      # 1 seed
 CORESET_RATIO = 0.5      # each coreset half of the tiny dataset
 # =====================================================
 
-
-# --------------------------------------
-# METHODS to test in this tiny batch
-# --------------------------------------
+# Methods to test
 TEST_CONFIGS = [
     ("fedavg",  "full",       False),
     ("fedavg",  "forgetting", True),
@@ -44,7 +51,39 @@ TEST_CONFIGS = [
     ("fedprox", "forgetting", True),
     ("fedprox", "sieve",      True),
 ]
-# --------------------------------------
+
+
+def maybe_clear_results():
+    """Optionally clear old CSVs and plot if CLEAR_RESULTS=1."""
+    clear_flag = os.getenv("CLEAR_RESULTS", "0")
+    if clear_flag != "1":
+        print("[INFO] CLEAR_RESULTS != 1, keeping existing results/")
+        return
+
+    os.makedirs("results", exist_ok=True)
+    for f in glob.glob("results/*.csv"):
+        os.remove(f)
+    png_path = os.path.join("results", "avg_comparison.png")
+    if os.path.exists(png_path):
+        os.remove(png_path)
+
+    print("[INFO] Cleared old CSVs and avg_comparison.png in results/")
+
+
+def maybe_plot_after():
+    """Optionally call scripts.plot_avg_results if PLOT_AFTER=1."""
+    plot_flag = os.getenv("PLOT_AFTER", "0")
+    if plot_flag != "1":
+        print("[INFO] PLOT_AFTER != 1, skipping automatic plotting")
+        return
+
+    print("[INFO] Calling scripts.plot_avg_results to generate plot...")
+    # Import and call main() from plot_avg_results
+    try:
+        from scripts.plot_avg_results import main as plot_main
+        plot_main()
+    except Exception as e:
+        print("[WARN] Failed to run plot_avg_results:", e)
 
 
 def run_experiment(cfg):
@@ -93,6 +132,8 @@ def run_experiment(cfg):
 
 
 def main():
+    maybe_clear_results()
+
     all_cfgs = []
     for alpha in ALPHAS:
         for seed in SEEDS:
@@ -104,6 +145,8 @@ def main():
     print(f"[TEST] Total runs: {len(all_cfgs)}")
     for cfg in all_cfgs:
         run_experiment(cfg)
+
+    maybe_plot_after()
 
 
 if __name__ == "__main__":
